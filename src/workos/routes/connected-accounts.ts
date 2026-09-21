@@ -8,7 +8,7 @@ import {
   WorkOSApiError,
 } from '../../core/index.js';
 import { getWorkOSStore } from '../store.js';
-import { formatConnectedAccount, dataIntegrationIdFor } from '../helpers.js';
+import { formatConnectedAccount, dataIntegrationIdFor, findConnectedAccount } from '../helpers.js';
 import type { ConnectedAccountState, WorkOSConnectedAccount } from '../entities.js';
 
 /**
@@ -81,11 +81,14 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
 
   /**
    * The account a request addresses. The user in the path and the organization in the query
-   * (when given) must both exist — the spec 404s on either before the account itself — and the
-   * account is keyed by (user, slug, organization): a connection made without an organization
-   * scope is a different account from one made with it, so the lookups never cross.
+   * (when given) must both exist — the spec 404s on either before the account itself. Import
+   * keys the account by (user, slug, organization) exactly, since that key decides 201 vs 409;
+   * the other verbs treat `organization_id` as a filter (see `findConnectedAccount`).
    */
-  function resolveTarget(c: Context<WorkOSAppEnv, typeof ACCOUNT_PATH>): {
+  function resolveTarget(
+    c: Context<WorkOSAppEnv, typeof ACCOUNT_PATH>,
+    { exact = false } = {},
+  ): {
     userId: string;
     slug: string;
     organizationId: string | null;
@@ -98,9 +101,11 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     const organizationId = new URL(c.req.url).searchParams.get('organization_id');
     if (organizationId && !ws.organizations.get(organizationId)) throw notFound('Organization');
 
-    const account = ws.connectedAccounts
-      .findBy('user_id', user.id)
-      .find((a) => a.provider === slug && a.organization_id === (organizationId ?? null));
+    const account = exact
+      ? ws.connectedAccounts
+          .findBy('user_id', user.id)
+          .find((a) => a.provider === slug && a.organization_id === (organizationId ?? null))
+      : findConnectedAccount(ws, user.id, slug, organizationId ?? null);
     return { userId: user.id, slug, organizationId: organizationId ?? null, account };
   }
 
@@ -111,7 +116,7 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
   });
 
   app.post(ACCOUNT_PATH, async (c) => {
-    const { userId, slug, organizationId, account } = resolveTarget(c);
+    const { userId, slug, organizationId, account } = resolveTarget(c, { exact: true });
     if (account) {
       throw new WorkOSApiError(
         409,
@@ -150,12 +155,13 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
     // scopes-only update must not silently reconnect a needs_reauthorization account.
     const credentialsTouched =
       dto.access_token !== undefined || dto.refresh_token !== undefined || dto.expires_at !== undefined;
+    // An expiry describes its access token: a replacement token sent without one is unexpired, and
+    // the previous token's expiry must not linger on the row to expire it later.
+    const tokenExpiresAt = dto.expires_at ?? (dto.access_token === undefined ? account.token_expires_at : null);
     const merged: ConnectedAccountDto = {
       access_token: dto.access_token ?? account.access_token ?? undefined,
       refresh_token: dto.refresh_token ?? account.refresh_token ?? undefined,
-      // An expiry describes its access token: a replacement token sent without one is unexpired.
-      expires_at:
-        dto.expires_at ?? (dto.access_token === undefined ? (account.token_expires_at ?? undefined) : undefined),
+      expires_at: tokenExpiresAt ?? undefined,
     };
     const canDerive = merged.access_token !== undefined || merged.refresh_token !== undefined;
     const state = dto.state ?? (credentialsTouched && canDerive ? deriveState(merged) : account.state);
@@ -164,7 +170,7 @@ export function connectedAccountRoutes(ctx: RouteContext): void {
       ...(dto.scopes !== undefined ? { scopes: dto.scopes } : {}),
       ...(dto.access_token !== undefined ? { access_token: dto.access_token } : {}),
       ...(dto.refresh_token !== undefined ? { refresh_token: dto.refresh_token } : {}),
-      ...(dto.expires_at !== undefined ? { token_expires_at: dto.expires_at } : {}),
+      token_expires_at: tokenExpiresAt,
       state,
     });
     return c.json(formatConnectedAccount(updated!));
