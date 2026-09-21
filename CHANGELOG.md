@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/workos/emulate/compare/v0.13.1...v0.14.0) (2026-09-21)
+
+
+### Features
+
+* **seed:** create directories, groups and users from config ([#116](https://github.com/workos/emulate/issues/116)) ([7f32b7a](https://github.com/workos/emulate/commit/7f32b7aa8afcec327a3cca4bc58f0c11e5524765))
+
+
+### Bug Fixes
+
+* return imported connected-account tokens through Pipes ([#117](https://github.com/workos/emulate/issues/117)) ([de4ccdc](https://github.com/workos/emulate/commit/de4ccdcde0339abf416834794aec47cd6e30aa36))
+
 ## [0.13.1](https://github.com/workos/emulate/compare/v0.13.0...v0.13.1) (2026-09-15)
 
 
