@@ -127,11 +127,15 @@ describe('SSO routes', () => {
     // The hint-only selector reads domains the same way.
     expect(await authorizedOrganization('domain_hint=ACME.com')).toBe(acme.id);
 
-    const ambiguous = await app.request(
-      '/sso/authorize?provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback',
-    );
-    expect(ambiguous.status).toBe(400);
-    expect((await json(ambiguous)).code).toBe('invalid_request');
+    const refused = async (query: string) => {
+      const res = await app.request(`/sso/authorize?${query}&redirect_uri=http://localhost:3000/callback`);
+      expect(res.status).toBe(400);
+      expect((await json(res)).code).toBe('invalid_request');
+    };
+    await refused('provider=GoogleOAuth');
+    // Nothing stops two organizations claiming one domain, so the hint alone can be ambiguous too.
+    await createProviderConnection('Acme Shadow', 'GenericSAML', ['acme.com']);
+    await refused('domain_hint=acme.com');
   });
 
   // The last exact-match lookup by email. A login_hint differing only in case is the same

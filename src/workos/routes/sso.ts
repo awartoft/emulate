@@ -47,26 +47,33 @@ export function ssoRoutes(ctx: RouteContext): void {
     cn.domains.some((d) => d.domain.trim().toLowerCase() === domain.trim().toLowerCase());
 
   /**
+   * The one active connection a selector names, or a refusal. The chosen connection supplies
+   * the organization the profile and code are minted under, so picking whichever organization
+   * was created first would authenticate the user into the wrong tenant.
+   */
+  function theOnly(candidates: WorkOSConnection[], selector: string): WorkOSConnection | undefined {
+    if (candidates.length > 1) {
+      throw new WorkOSApiError(
+        400,
+        `Multiple active connections match ${selector}; select one with connection or organization`,
+        'invalid_request',
+      );
+    }
+    return candidates[0];
+  }
+
+  /**
    * workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`: the connection type,
    * not a connection id. Production holds one OAuth connection of each type per environment,
    * so the type alone names it. The emulator lets every organization hold one, so the spec's
    * `domain_hint` — Microsoft's tenant pre-fill — narrows the candidates when one of them
    * claims the domain, and is otherwise the hint the spec says it is rather than a selector
-   * that 404s a provider it does not name. What the hint leaves ambiguous is refused: picking
-   * whichever organization was created first would mint the code under the wrong tenant.
+   * that 404s a provider it does not name.
    */
   function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
     const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
     const hinted = domainHint ? ofType.filter((cn) => claimsDomain(cn, domainHint)) : [];
-    const candidates = hinted.length > 0 ? hinted : ofType;
-    if (candidates.length > 1) {
-      throw new WorkOSApiError(
-        400,
-        `Multiple active ${provider} connections; select one with connection, organization or domain_hint`,
-        'invalid_request',
-      );
-    }
-    return candidates[0];
+    return theOnly(hinted.length > 0 ? hinted : ofType, `provider ${provider}`);
   }
 
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
@@ -83,7 +90,10 @@ export function ssoRoutes(ctx: RouteContext): void {
     } else if (provider) {
       connection = findProviderConnection(provider, domainHint);
     } else if (domainHint) {
-      connection = ws.connections.all().find((cn) => cn.state === 'active' && claimsDomain(cn, domainHint));
+      connection = theOnly(
+        ws.connections.all().filter((cn) => cn.state === 'active' && claimsDomain(cn, domainHint)),
+        `domain_hint ${domainHint}`,
+      );
     }
 
     if (!connection || connection.state !== 'active') {
