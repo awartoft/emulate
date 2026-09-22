@@ -42,6 +42,29 @@ export function ssoRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
+  /**
+   * workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`: the connection type,
+   * not a connection id. Production holds one OAuth connection of each type per environment,
+   * so the type alone names it. The emulator lets every organization hold one, so the spec's
+   * `domain_hint` — Microsoft's tenant pre-fill — narrows the candidates when one of them
+   * claims the domain, and is otherwise the hint the spec says it is rather than a selector
+   * that 404s a provider it does not name. What the hint leaves ambiguous is refused: picking
+   * whichever organization was created first would mint the code under the wrong tenant.
+   */
+  function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
+    const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
+    const hinted = domainHint ? ofType.filter((cn) => cn.domains.some((d) => d.domain === domainHint)) : [];
+    const candidates = hinted.length > 0 ? hinted : ofType;
+    if (candidates.length > 1) {
+      throw new WorkOSApiError(
+        400,
+        `Multiple active ${provider} connections; select one with connection, organization or domain_hint`,
+        'invalid_request',
+      );
+    }
+    return candidates[0];
+  }
+
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
     const { redirectUri, state, connectionId, organizationId, domainHint, provider, email: loginHint } = params;
 
@@ -53,14 +76,12 @@ export function ssoRoutes(ctx: RouteContext): void {
       connection = ws.connections.get(connectionId);
     } else if (organizationId) {
       connection = ws.connections.findBy('organization_id', organizationId).find((cn) => cn.state === 'active');
+    } else if (provider) {
+      connection = findProviderConnection(provider, domainHint);
     } else if (domainHint) {
       connection = ws.connections
         .all()
         .find((cn) => cn.state === 'active' && cn.domains.some((d) => d.domain === domainHint));
-    } else if (provider) {
-      // workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`, which is the
-      // connection type, not a connection id.
-      connection = ws.connections.all().find((cn) => cn.state === 'active' && cn.connection_type === provider);
     }
 
     if (!connection || connection.state !== 'active') {

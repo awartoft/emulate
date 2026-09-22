@@ -85,6 +85,52 @@ describe('SSO routes', () => {
     expect(url.searchParams.get('state')).toBe('abc');
   });
 
+  async function createProviderConnection(orgName: string, provider: string, domains: string[]) {
+    const org = await json(await req('/organizations', { method: 'POST', body: JSON.stringify({ name: orgName }) }));
+    await req('/connections', {
+      method: 'POST',
+      body: JSON.stringify({ name: provider, organization_id: org.id, connection_type: provider, domains }),
+    });
+    return org;
+  }
+
+  async function authorizedOrganization(query: string) {
+    const authRes = await app.request(`/sso/authorize?${query}&redirect_uri=http://localhost:3000/callback`);
+    expect(authRes.status).toBe(302);
+    const code = new URL(authRes.headers.get('location')!).searchParams.get('code')!;
+    const tokenRes = await app.request('/sso/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code }),
+    });
+    return (await json(tokenRes)).profile.organization_id;
+  }
+
+  // The spec's domain_hint pre-fills Microsoft's tenant field; it is not a selector. A provider
+  // login that carries one must not 404 because no connection happens to claim the domain.
+  it('treats domain_hint as a hint when a provider is named', async () => {
+    const org = await createProviderConnection('Microsoft Org', 'MicrosoftOAuth', []);
+
+    expect(await authorizedOrganization('provider=MicrosoftOAuth&domain_hint=acme.com')).toBe(org.id);
+  });
+
+  // Production has one OAuth connection per type per environment; the emulator lets each
+  // organization hold one. The hint picks among them, and what it leaves ambiguous is refused
+  // rather than resolved to whichever organization came first.
+  it('selects among same-type provider connections by domain_hint, and refuses to guess', async () => {
+    const acme = await createProviderConnection('Acme', 'GoogleOAuth', ['acme.com']);
+    const globex = await createProviderConnection('Globex', 'GoogleOAuth', ['globex.com']);
+
+    expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=globex.com')).toBe(globex.id);
+    expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=acme.com')).toBe(acme.id);
+
+    const ambiguous = await app.request(
+      '/sso/authorize?provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback',
+    );
+    expect(ambiguous.status).toBe(400);
+    expect((await json(ambiguous)).code).toBe('invalid_request');
+  });
+
   // The last exact-match lookup by email. A login_hint differing only in case is the same
   // federated person, so it reuses the profile rather than minting a second one for the same
   // connection — which is the pair of records no lookup by email can tell apart, in profile form.
