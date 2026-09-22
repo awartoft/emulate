@@ -42,6 +42,10 @@ export function ssoRoutes(ctx: RouteContext): void {
   const { app, store, jwt } = ctx;
   const ws = getWorkOSStore(store);
 
+  /** Domains are case-insensitive; connections keep theirs as written. */
+  const claimsDomain = (cn: WorkOSConnection, domain: string) =>
+    cn.domains.some((d) => d.domain.trim().toLowerCase() === domain.trim().toLowerCase());
+
   /**
    * workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`: the connection type,
    * not a connection id. Production holds one OAuth connection of each type per environment,
@@ -53,9 +57,7 @@ export function ssoRoutes(ctx: RouteContext): void {
    */
   function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
     const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
-    // Domains are case-insensitive; stored ones are kept as written.
-    const hint = domainHint?.trim().toLowerCase();
-    const hinted = hint ? ofType.filter((cn) => cn.domains.some((d) => d.domain.trim().toLowerCase() === hint)) : [];
+    const hinted = domainHint ? ofType.filter((cn) => claimsDomain(cn, domainHint)) : [];
     const candidates = hinted.length > 0 ? hinted : ofType;
     if (candidates.length > 1) {
       throw new WorkOSApiError(
@@ -81,9 +83,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     } else if (provider) {
       connection = findProviderConnection(provider, domainHint);
     } else if (domainHint) {
-      connection = ws.connections
-        .all()
-        .find((cn) => cn.state === 'active' && cn.domains.some((d) => d.domain === domainHint));
+      connection = ws.connections.all().find((cn) => cn.state === 'active' && claimsDomain(cn, domainHint));
     }
 
     if (!connection || connection.state !== 'active') {

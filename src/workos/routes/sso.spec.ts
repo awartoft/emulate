@@ -124,6 +124,8 @@ describe('SSO routes', () => {
 
     expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=GLOBEX.com')).toBe(globex.id);
     expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=acme.com')).toBe(acme.id);
+    // The hint-only selector reads domains the same way.
+    expect(await authorizedOrganization('domain_hint=ACME.com')).toBe(acme.id);
 
     const ambiguous = await app.request(
       '/sso/authorize?provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback',
