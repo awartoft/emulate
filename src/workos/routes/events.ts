@@ -34,7 +34,7 @@ function eventInScope(
   rangeStart: string | null,
   rangeEnd: string | null,
 ): boolean {
-  if (organizationId && event.data.organization_id !== organizationId) return false;
+  if (organizationId && event.organization_id !== organizationId) return false;
 
   const createdAt = Date.parse(event.created_at);
   if (rangeStart) {

@@ -86,6 +86,7 @@ import type {
   WorkOSConnectionType,
   WorkOSDirectoryGroup,
   WorkOSDirectoryUser,
+  WorkOSOrganization,
   WorkOSOrganizationMembership,
   PipeProvider,
   PipeConnectionStatus,
@@ -1110,10 +1111,14 @@ export const workosPlugin: ServicePlugin = {
       onUpdate: (u) => eventBus.emit({ event: EVENTS.userUpdated, data: formatUser(u) }),
       onDelete: (u) => eventBus.emit({ event: EVENTS.userDeleted, data: formatUser(u) }),
     });
+    // The organization's own events occur within it: `data` is the organization, so its id is
+    // the scope, not a `data.organization_id`.
+    const organizationEvent = (event: string) => (o: WorkOSOrganization) =>
+      eventBus.emit({ event, data: formatOrganization(o, ws), organization_id: o.id });
     ws.organizations.setHooks({
-      onInsert: (o) => eventBus.emit({ event: EVENTS.organizationCreated, data: formatOrganization(o, ws) }),
-      onUpdate: (o) => eventBus.emit({ event: EVENTS.organizationUpdated, data: formatOrganization(o, ws) }),
-      onDelete: (o) => eventBus.emit({ event: EVENTS.organizationDeleted, data: formatOrganization(o, ws) }),
+      onInsert: organizationEvent(EVENTS.organizationCreated),
+      onUpdate: organizationEvent(EVENTS.organizationUpdated),
+      onDelete: organizationEvent(EVENTS.organizationDeleted),
     });
     ws.organizationDomains.setHooks({
       onInsert: (d) => eventBus.emit({ event: EVENTS.organizationDomainCreated, data: formatDomain(d) }),
@@ -1131,7 +1136,8 @@ export const workosPlugin: ServicePlugin = {
     });
     // AuthKit groups. `group.created`/`updated`/`deleted` carry the full Group object the
     // spec's event data requires; `group.member_added`/`member_removed` carry only the two
-    // ids. Hook-driven (not inline in the routes) so seeded groups fire the same events.
+    // ids, so the group's organization is recorded alongside for the events filter to scope
+    // on. Hook-driven (not inline in the routes) so seeded groups fire the same events.
     ws.groups.setHooks({
       onInsert: (g) => eventBus.emit({ event: EVENTS.groupCreated, data: formatGroup(g) }),
       onUpdate: (g) => eventBus.emit({ event: EVENTS.groupUpdated, data: formatGroup(g) }),
@@ -1142,11 +1148,13 @@ export const workosPlugin: ServicePlugin = {
         eventBus.emit({
           event: EVENTS.groupMemberAdded,
           data: { group_id: gm.group_id, organization_membership_id: gm.organization_membership_id },
+          organization_id: ws.groups.get(gm.group_id)?.organization_id ?? null,
         }),
       onDelete: (gm) =>
         eventBus.emit({
           event: EVENTS.groupMemberRemoved,
           data: { group_id: gm.group_id, organization_membership_id: gm.organization_membership_id },
+          organization_id: ws.groups.get(gm.group_id)?.organization_id ?? null,
         }),
     });
     // Pipes connected accounts. The event is named by the state the row lands in, so the
@@ -1251,6 +1259,7 @@ export const workosPlugin: ServicePlugin = {
           user: formatDirectoryUser(user),
           group: group ? formatDirectoryGroup(group) : { object: 'directory_group', id: groupId },
         },
+        organization_id: user.organization_id,
       });
     };
     ws.directoryUsers.setHooks({

@@ -21,11 +21,12 @@ describe('Events routes', () => {
 
   const req = (path: string, init?: RequestInit) => app.request(path, { headers, ...init });
   const json = (res: Response) => res.json() as Promise<any>;
+  const eventRow = { object: 'event', data: {}, organization_id: null, environment_id: null } as const;
 
   it('lists events', async () => {
     const ws = getWorkOSStore(store);
-    ws.events.insert({ object: 'event', event: 'user.created', data: { id: 'user_1' }, environment_id: null });
-    ws.events.insert({ object: 'event', event: 'organization.created', data: { id: 'org_1' }, environment_id: null });
+    ws.events.insert({ ...eventRow, event: 'user.created', data: { id: 'user_1' } });
+    ws.events.insert({ ...eventRow, event: 'organization.created', data: { id: 'org_1' }, organization_id: 'org_1' });
 
     const res = await req('/events');
     expect(res.status).toBe(200);
@@ -37,9 +38,9 @@ describe('Events routes', () => {
 
   it('filters events by type', async () => {
     const ws = getWorkOSStore(store);
-    ws.events.insert({ object: 'event', event: 'user.created', data: {}, environment_id: null });
-    ws.events.insert({ object: 'event', event: 'user.updated', data: {}, environment_id: null });
-    ws.events.insert({ object: 'event', event: 'organization.created', data: {}, environment_id: null });
+    ws.events.insert({ ...eventRow, event: 'user.created' });
+    ws.events.insert({ ...eventRow, event: 'user.updated' });
+    ws.events.insert({ ...eventRow, event: 'organization.created' });
 
     const res = await req('/events?events[]=user.created&events[]=user.updated');
     const list = await json(res);
@@ -55,9 +56,9 @@ describe('Events routes', () => {
 
   it('filters events by the repeated events parameter', async () => {
     const ws = getWorkOSStore(store);
-    ws.events.insert({ object: 'event', event: 'user.created', data: {}, environment_id: null });
-    ws.events.insert({ object: 'event', event: 'user.updated', data: {}, environment_id: null });
-    ws.events.insert({ object: 'event', event: 'organization.created', data: {}, environment_id: null });
+    ws.events.insert({ ...eventRow, event: 'user.created' });
+    ws.events.insert({ ...eventRow, event: 'user.updated' });
+    ws.events.insert({ ...eventRow, event: 'organization.created' });
 
     const res = await req('/events?events=user.created&events=user.updated');
     const list = await json(res);
@@ -68,16 +69,16 @@ describe('Events routes', () => {
   it('filters events by organization and range', async () => {
     const ws = getWorkOSStore(store);
     ws.events.insert({
-      object: 'event',
+      ...eventRow,
       event: 'dsync.user.created',
       data: { organization_id: 'org_1' },
-      environment_id: null,
+      organization_id: 'org_1',
     });
     ws.events.insert({
-      object: 'event',
+      ...eventRow,
       event: 'dsync.user.created',
       data: { organization_id: 'org_2' },
-      environment_id: null,
+      organization_id: 'org_2',
     });
 
     const past = new Date(Date.now() - 60_000).toISOString();
@@ -92,6 +93,75 @@ describe('Events routes', () => {
 
     const ended = await json(await req(`/events?range_end=${encodeURIComponent(past)}`));
     expect(ended.data).toHaveLength(0);
+  });
+
+  // Scope is the organization an event occurred within, not whether its payload names one:
+  // organization.* events carry the organization itself, group.member_* carry only ids, and
+  // dsync.group.user_* nest theirs. An organization-scoped poller must see all of them.
+  it('scopes organization and membership events to their organization', async () => {
+    const post = async (path: string, body: Record<string, unknown>) =>
+      json(await req(path, { method: 'POST', body: JSON.stringify(body) }));
+    const org = await post('/organizations', { name: 'Acme' });
+    const other = await post('/organizations', { name: 'Globex' });
+    const user = await post('/user_management/users', { email: 'jane@acme.com' });
+    const membership = await post('/user_management/organization_memberships', {
+      user_id: user.id,
+      organization_id: org.id,
+    });
+    const group = await post(`/organizations/${org.id}/groups`, { name: 'Engineering' });
+    await post(`/organizations/${org.id}/groups/${group.id}/organization-memberships`, {
+      organization_membership_id: membership.id,
+    });
+
+    const ws = getWorkOSStore(store);
+    const directory = ws.directories.insert({
+      object: 'directory',
+      name: 'Okta',
+      organization_id: org.id,
+      domain: 'acme.com',
+      type: 'okta scim v2.0',
+      state: 'linked',
+      external_key: 'ext_1',
+    });
+    const directoryGroup = ws.directoryGroups.insert({
+      object: 'directory_group',
+      directory_id: directory.id,
+      organization_id: org.id,
+      idp_id: 'idp_grp_1',
+      name: 'Engineering',
+      raw_attributes: {},
+    });
+    ws.directoryUsers.insert({
+      object: 'directory_user',
+      directory_id: directory.id,
+      organization_id: org.id,
+      idp_id: 'idp_usr_1',
+      first_name: 'Jane',
+      last_name: 'Doe',
+      email: 'jane@acme.com',
+      username: 'jdoe',
+      state: 'active',
+      role: null,
+      custom_attributes: {},
+      raw_attributes: {},
+      groups: [{ object: 'directory_group', id: directoryGroup.id, name: 'Engineering' }],
+    });
+    // Deleting the directory removes its users and groups; the removal it emits must still
+    // land in the organization's history once nothing it refers to exists.
+    await req(`/directories/${directory.id}`, { method: 'DELETE' });
+
+    const scoped = await json(await req(`/events?organization_id=${org.id}&limit=100`));
+    const types = scoped.data.map((e: any) => e.event);
+    expect(types).toContain('organization.created');
+    expect(types).toContain('group.member_added');
+    expect(types).toContain('dsync.group.user_added');
+    expect(types).toContain('dsync.group.user_removed');
+    expect(types).not.toContain('user.created');
+    // The scope is the emulator's, not the spec's: it never reaches the wire.
+    expect(scoped.data.some((e: any) => 'organization_id' in e)).toBe(false);
+
+    const others = await json(await req(`/events?organization_id=${other.id}`));
+    expect(others.data.map((e: any) => e.event)).toEqual(['organization.created']);
   });
 
   it('event from user creation appears in events list', async () => {
