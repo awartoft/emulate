@@ -115,13 +115,14 @@ describe('SSO routes', () => {
   });
 
   // Production has one OAuth connection per type per environment; the emulator lets each
-  // organization hold one. The hint picks among them, and what it leaves ambiguous is refused
-  // rather than resolved to whichever organization came first.
+  // organization hold one. The hint picks among them — domains being case-insensitive, in
+  // whatever case either side was written — and what it leaves ambiguous is refused rather
+  // than resolved to whichever organization came first.
   it('selects among same-type provider connections by domain_hint, and refuses to guess', async () => {
-    const acme = await createProviderConnection('Acme', 'GoogleOAuth', ['acme.com']);
+    const acme = await createProviderConnection('Acme', 'GoogleOAuth', ['Acme.com']);
     const globex = await createProviderConnection('Globex', 'GoogleOAuth', ['globex.com']);
 
-    expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=globex.com')).toBe(globex.id);
+    expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=GLOBEX.com')).toBe(globex.id);
     expect(await authorizedOrganization('provider=GoogleOAuth&domain_hint=acme.com')).toBe(acme.id);
 
     const ambiguous = await app.request(

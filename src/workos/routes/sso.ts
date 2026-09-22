@@ -53,7 +53,9 @@ export function ssoRoutes(ctx: RouteContext): void {
    */
   function findProviderConnection(provider: string, domainHint: string | null): WorkOSConnection | undefined {
     const ofType = ws.connections.all().filter((cn) => cn.state === 'active' && cn.connection_type === provider);
-    const hinted = domainHint ? ofType.filter((cn) => cn.domains.some((d) => d.domain === domainHint)) : [];
+    // Domains are case-insensitive; stored ones are kept as written.
+    const hint = domainHint?.trim().toLowerCase();
+    const hinted = hint ? ofType.filter((cn) => cn.domains.some((d) => d.domain.trim().toLowerCase() === hint)) : [];
     const candidates = hinted.length > 0 ? hinted : ofType;
     if (candidates.length > 1) {
       throw new WorkOSApiError(
