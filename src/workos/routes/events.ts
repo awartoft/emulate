@@ -10,9 +10,13 @@ export function eventRoutes(ctx: RouteContext): void {
   app.get('/events', (c) => {
     const url = new URL(c.req.url);
     const params = parseListParams(url);
-    // workos-go encodes the filter as repeated `events=` (no brackets). The
-    // documented form is `events[]`. Both name the same parameter.
-    const eventTypes = [...url.searchParams.getAll('events'), ...url.searchParams.getAll('events[]')];
+    // The spec says `style: form, explode: false` (`events=a,b`), which is what workos-python,
+    // -kotlin, -elixir and -rust send. Production parses the query with `qs` and splits a scalar
+    // on commas, so it also takes repeated `events=` (workos-go, -node, -ruby), `events[]=`
+    // (workos-dotnet) and indexed `events[0]=` (workos-php). Accept all four.
+    const eventTypes = [...url.searchParams]
+      .filter(([key]) => key === 'events' || /^events\[\d*\]$/.test(key))
+      .flatMap(([, value]) => value.split(','));
     const organizationId = url.searchParams.get('organization_id');
     const rangeStart = url.searchParams.get('range_start');
     const rangeEnd = url.searchParams.get('range_end');

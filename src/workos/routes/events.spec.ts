@@ -54,14 +54,21 @@ describe('Events routes', () => {
     expect(list.data).toHaveLength(0);
   });
 
-  it('filters events by the repeated events parameter', async () => {
+  // Every wire form an SDK encodes the `events` array as. Production's `qs` parser plus a
+  // comma split accepts all of them; a poller whose form is not read here sees either every
+  // event or none.
+  it.each([
+    ['comma-joined (spec form; python, kotlin, elixir, rust)', 'events=user.created,user.updated'],
+    ['repeated (go, node, ruby)', 'events=user.created&events=user.updated'],
+    ['bracketed (dotnet)', 'events[]=user.created&events[]=user.updated'],
+    ['indexed (php)', 'events[0]=user.created&events[1]=user.updated'],
+  ])('filters events by the %s events parameter', async (_form, query) => {
     const ws = getWorkOSStore(store);
     ws.events.insert({ ...eventRow, event: 'user.created' });
     ws.events.insert({ ...eventRow, event: 'user.updated' });
     ws.events.insert({ ...eventRow, event: 'organization.created' });
 
-    const res = await req('/events?events=user.created&events=user.updated');
-    const list = await json(res);
+    const list = await json(await req(`/events?${query}`));
     expect(list.data).toHaveLength(2);
     expect(list.data.every((e: any) => e.event.startsWith('user.'))).toBe(true);
   });
