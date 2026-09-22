@@ -59,6 +59,32 @@ describe('SSO routes', () => {
     expect(url.searchParams.get('state')).toBe('abc');
   });
 
+  it('sso authorize resolves a social provider to that connection type', async () => {
+    const org = await json(
+      await req('/organizations', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Social Org' }),
+      }),
+    );
+    await req('/connections', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Google',
+        organization_id: org.id,
+        connection_type: 'GoogleOAuth',
+        domains: ['gmail.example.com'],
+      }),
+    });
+
+    const res = await app.request(
+      '/sso/authorize?provider=GoogleOAuth&redirect_uri=http://localhost:3000/callback&state=abc',
+    );
+    expect(res.status).toBe(302);
+    const url = new URL(res.headers.get('location')!);
+    expect(url.searchParams.get('code')).toBeTruthy();
+    expect(url.searchParams.get('state')).toBe('abc');
+  });
+
   // The last exact-match lookup by email. A login_hint differing only in case is the same
   // federated person, so it reuses the profile rather than minting a second one for the same
   // connection — which is the pair of records no lookup by email can tell apart, in profile form.

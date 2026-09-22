@@ -34,6 +34,7 @@ interface SSOAuthorizeParams {
   connectionId: string | null;
   organizationId: string | null;
   domainHint: string | null;
+  provider: string | null;
   email: string | null;
 }
 
@@ -42,7 +43,7 @@ export function ssoRoutes(ctx: RouteContext): void {
   const ws = getWorkOSStore(store);
 
   function resolveAndRedirect(c: any, params: SSOAuthorizeParams) {
-    const { redirectUri, state, connectionId, organizationId, domainHint, email: loginHint } = params;
+    const { redirectUri, state, connectionId, organizationId, domainHint, provider, email: loginHint } = params;
 
     assertAllowedRedirectUri(redirectUri, store);
 
@@ -56,6 +57,10 @@ export function ssoRoutes(ctx: RouteContext): void {
       connection = ws.connections
         .all()
         .find((cn) => cn.state === 'active' && cn.domains.some((d) => d.domain === domainHint));
+    } else if (provider) {
+      // workos-go sends social login as `provider=GoogleOAuth|MicrosoftOAuth`, which is the
+      // connection type, not a connection id.
+      connection = ws.connections.all().find((cn) => cn.state === 'active' && cn.connection_type === provider);
     }
 
     if (!connection || connection.state !== 'active') {
@@ -107,6 +112,7 @@ export function ssoRoutes(ctx: RouteContext): void {
     const connectionId = url.searchParams.get('connection');
     const organizationId = url.searchParams.get('organization');
     const domainHint = url.searchParams.get('domain_hint');
+    const provider = url.searchParams.get('provider');
     const loginHint = url.searchParams.get('login_hint');
 
     if (!redirectUri) {
@@ -125,6 +131,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       if (connectionId) hiddenFields.connection = connectionId;
       if (organizationId) hiddenFields.organization = organizationId;
       if (domainHint) hiddenFields.domain_hint = domainHint;
+      if (provider) hiddenFields.provider = provider;
 
       return c.html(
         renderLoginPage({
@@ -143,6 +150,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       connectionId,
       organizationId,
       domainHint,
+      provider,
       email: loginHint,
     });
   });
@@ -160,6 +168,7 @@ export function ssoRoutes(ctx: RouteContext): void {
       connectionId: (form.connection as string) ?? null,
       organizationId: (form.organization as string) ?? null,
       domainHint: (form.domain_hint as string) ?? null,
+      provider: (form.provider as string) ?? null,
       email: (form.email as string) ?? null,
     });
   });

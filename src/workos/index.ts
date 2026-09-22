@@ -85,6 +85,7 @@ import {
 import type {
   WorkOSConnectionType,
   WorkOSDirectoryGroup,
+  WorkOSDirectoryUser,
   WorkOSOrganizationMembership,
   PipeProvider,
   PipeConnectionStatus,
@@ -1241,10 +1242,33 @@ export const workosPlugin: ServicePlugin = {
       },
       onDelete: (d) => eventBus.emit({ event: EVENTS.dsyncDeleted, data: formatDirectory(d) }),
     });
+    const emitDirectoryGroupMembership = (user: WorkOSDirectoryUser, groupId: string, added: boolean) => {
+      const group = ws.directoryGroups.get(groupId);
+      eventBus.emit({
+        event: added ? EVENTS.dsyncGroupUserAdded : EVENTS.dsyncGroupUserRemoved,
+        data: {
+          directory_id: user.directory_id,
+          user: formatDirectoryUser(user),
+          group: group ? formatDirectoryGroup(group) : { object: 'directory_group', id: groupId },
+        },
+      });
+    };
     ws.directoryUsers.setHooks({
-      onInsert: (u) => eventBus.emit({ event: EVENTS.dsyncUserCreated, data: formatDirectoryUser(u) }),
-      onUpdate: (u) => eventBus.emit({ event: EVENTS.dsyncUserUpdated, data: formatDirectoryUser(u) }),
-      onDelete: (u) => eventBus.emit({ event: EVENTS.dsyncUserDeleted, data: formatDirectoryUser(u) }),
+      onInsert: (u) => {
+        eventBus.emit({ event: EVENTS.dsyncUserCreated, data: formatDirectoryUser(u) });
+        for (const group of u.groups) emitDirectoryGroupMembership(u, group.id, true);
+      },
+      onUpdate: (u, previous) => {
+        eventBus.emit({ event: EVENTS.dsyncUserUpdated, data: formatDirectoryUser(u) });
+        const before = new Set(previous.groups.map((group) => group.id));
+        const after = new Set(u.groups.map((group) => group.id));
+        for (const groupId of after) if (!before.has(groupId)) emitDirectoryGroupMembership(u, groupId, true);
+        for (const groupId of before) if (!after.has(groupId)) emitDirectoryGroupMembership(u, groupId, false);
+      },
+      onDelete: (u) => {
+        for (const group of u.groups) emitDirectoryGroupMembership(u, group.id, false);
+        eventBus.emit({ event: EVENTS.dsyncUserDeleted, data: formatDirectoryUser(u) });
+      },
     });
     ws.directoryGroups.setHooks({
       onInsert: (g) => eventBus.emit({ event: EVENTS.dsyncGroupCreated, data: formatDirectoryGroup(g) }),

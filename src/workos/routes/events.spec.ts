@@ -53,6 +53,47 @@ describe('Events routes', () => {
     expect(list.data).toHaveLength(0);
   });
 
+  it('filters events by the repeated events parameter', async () => {
+    const ws = getWorkOSStore(store);
+    ws.events.insert({ object: 'event', event: 'user.created', data: {}, environment_id: null });
+    ws.events.insert({ object: 'event', event: 'user.updated', data: {}, environment_id: null });
+    ws.events.insert({ object: 'event', event: 'organization.created', data: {}, environment_id: null });
+
+    const res = await req('/events?events=user.created&events=user.updated');
+    const list = await json(res);
+    expect(list.data).toHaveLength(2);
+    expect(list.data.every((e: any) => e.event.startsWith('user.'))).toBe(true);
+  });
+
+  it('filters events by organization and range', async () => {
+    const ws = getWorkOSStore(store);
+    ws.events.insert({
+      object: 'event',
+      event: 'dsync.user.created',
+      data: { organization_id: 'org_1' },
+      environment_id: null,
+    });
+    ws.events.insert({
+      object: 'event',
+      event: 'dsync.user.created',
+      data: { organization_id: 'org_2' },
+      environment_id: null,
+    });
+
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+
+    const kept = await json(await req(`/events?organization_id=org_1&range_start=${encodeURIComponent(past)}`));
+    expect(kept.data).toHaveLength(1);
+    expect(kept.data[0].data.organization_id).toBe('org_1');
+
+    const later = await json(await req(`/events?range_start=${encodeURIComponent(future)}`));
+    expect(later.data).toHaveLength(0);
+
+    const ended = await json(await req(`/events?range_end=${encodeURIComponent(past)}`));
+    expect(ended.data).toHaveLength(0);
+  });
+
   it('event from user creation appears in events list', async () => {
     // Create a user which should trigger an event via collection hooks
     await req('/user_management/users', {
